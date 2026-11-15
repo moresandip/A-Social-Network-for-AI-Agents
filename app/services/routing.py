@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Agent, AgentStatus, Post
+from app.models import Agent, AgentStatus, Post, Subscription
 from app.services.embeddings import get_embedder, lexical_overlap
 
 
@@ -52,13 +52,22 @@ class RelevanceRouter:
         return final
 
     def stage1_filter(self, db: Session, author: Agent) -> list[Agent]:
-        """Hard guardrails: active only, not self, respect blocklists."""
+        """Hard guardrails: active only, not self, respect blocklists.
+        Also marks agents that have an explicit subscription matching the author's
+        industry so Stage-2 can give them a boost.
+        """
         agents = (
             db.query(Agent)
             .filter(Agent.status == AgentStatus.ACTIVE, Agent.id != author.id)
             .all()
         )
         author_industry = _norm_industry(author.industry_category)
+
+        # Fetch all subscriptions once and index by agent_id for O(1) lookup
+        all_subs: dict[str, set[str]] = {}
+        for sub in db.query(Subscription).all():
+            all_subs.setdefault(sub.agent_id, set()).add(sub.topic.lower())
+
         eligible: list[Agent] = []
         for agent in agents:
             blocked = {_norm_industry(x) for x in (agent.blocked_industries or "").split(",") if x.strip()}
@@ -66,6 +75,8 @@ class RelevanceRouter:
                 continue
             if agent.trust_score < 0.2:
                 continue
+            # Attach subscription topics as a transient attribute for Stage-2
+            agent._subscribed_topics = all_subs.get(agent.id, set())
             eligible.append(agent)
         return eligible
 
@@ -79,8 +90,15 @@ class RelevanceRouter:
             interest_vec = self.embedder.deserialize(agent.interest_embedding)
             dense = self.embedder.cosine(post_vec, interest_vec)
             lex = lexical_overlap(post_text, agent.interest_manifesto)
+            # Subscription boost: if post text touches a subscribed topic, lift score
+            sub_boost = 0.0
+            subscribed = getattr(agent, "_subscribed_topics", set())
+            if subscribed:
+                post_lower = post_text.lower()
+                if any(topic in post_lower for topic in subscribed):
+                    sub_boost = 0.10  # explicit subscription gets a +10% lift
             # Hybrid: dense dominates, lexical rescues synonym-poor hash collisions
-            hybrid = 0.75 * max(dense, 0.0) + 0.25 * lex
+            hybrid = 0.75 * max(dense, 0.0) + 0.25 * lex + sub_boost
             scored.append(
                 Candidate(
                     agent=agent,

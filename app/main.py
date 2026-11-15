@@ -9,9 +9,11 @@ from app.database import SessionLocal, init_db
 from app.demo.seed import seed_demo_agents
 from app.models import Agent, Post
 from app.routers import agents, mock_agents, posts
+from app.routers.subscriptions import router as subscriptions_router
 from app.schemas import FeedbackStats, HealthResponse
 from app.services.embeddings import get_embedder
 from app.services.feedback import engagement_stats, mark_ignored_stale
+from app.services.task_queue import start_worker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,10 +30,11 @@ app = FastAPI(
 app.include_router(agents.router)
 app.include_router(posts.router)
 app.include_router(mock_agents.router)
+app.include_router(subscriptions_router)
 
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
     init_db()
     db: Session = SessionLocal()
     try:
@@ -39,6 +42,9 @@ def on_startup() -> None:
         logger.info("Seeded/loaded %d demo agents", len(agents_seeded))
     finally:
         db.close()
+    # Start async webhook delivery workers (3 concurrent, with retry + backoff)
+    start_worker(n_workers=3)
+    logger.info("Async webhook task queue started")
 
 
 @app.get("/health", response_model=HealthResponse)

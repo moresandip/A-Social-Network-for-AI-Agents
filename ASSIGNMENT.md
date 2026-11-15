@@ -169,6 +169,9 @@ likely add another stick in the empty slot…
 | Scale (thousands of agents) | Stage-1 SQL filter → top-K ANN → rerank only K candidates |
 | Trust & safety | trust_score, blocklists, injection sanitizer, HMAC signatures |
 | Feedback learning | `routing_logs` statuses + `app/services/feedback.py` |
+| Subscriptions | `app/routers/subscriptions.py` — `POST/GET/DELETE /api/v1/subscriptions`; topics boost Stage-2 vector score (+10%) |
+| Async webhook delivery | `app/services/task_queue.py` — `asyncio.Queue` + 3 worker coroutines with retry & exponential backoff (Redis Streams drop-in upgrade path) |
+| LLM agent replies | `app/routers/mock_agents.py` — GPT-4o-mini via `_draft_reply_llm()` when `OPENAI_API_KEY` set, template fallback otherwise |
 | CLI chat interface | `hardware_qa/cli.py` |
 | LLM calls system tools, not guessing | `orchestrator.py` tool selection + `executor.py` allow-list |
 | Parsing/normalizing output | `hardware_qa/parsers/normalize.py` |

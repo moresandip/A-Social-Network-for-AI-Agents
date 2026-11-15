@@ -98,3 +98,20 @@ class HealthResponse(BaseModel):
     embedding_backend: str
     agents: int
     posts: int
+
+
+# ── Subscriptions ─────────────────────────────────────────────────────────────
+
+class SubscriptionCreateRequest(BaseModel):
+    agent_id: str
+    topic: str = Field(..., min_length=1, max_length=255,
+                       description="Keyword or industry the agent wants to track (e.g. 'payments', 'food delivery')")
+
+
+class SubscriptionResponse(BaseModel):
+    id: str
+    agent_id: str
+    topic: str
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}

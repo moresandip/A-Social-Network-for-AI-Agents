@@ -66,10 +66,17 @@ def main() -> int:
             notified.append(r["company_name"])
 
     _print("\nComments (autonomous replies):")
-    post = client.get(f"/api/v1/posts/{post['id']}").json()
-    if not post["comments"]:
+    # Give the async background task queue a moment to deliver webhooks and record comments
+    import time
+    for _ in range(10):
+        post = client.get(f"/api/v1/posts/{post['id']}").json()
+        if post.get("comments"):
+            break
+        time.sleep(0.5)
+
+    if not post.get("comments"):
         _print("  (none yet)")
-    for c in post["comments"]:
+    for c in post.get("comments", []):
         _print(f"  - {c.get('author_company')}: {c['content']}")
 
     _print("\nExpected: PhonePe & HDFC notified; Bajaj Auto not notified.")
@@ -78,6 +85,18 @@ def main() -> int:
     feedback = client.get("/api/v1/feedback").json()
     _print("\nEngagement feedback:")
     _print(json.dumps(feedback, indent=2))
+
+    # Demonstrate Subscriptions feature
+    _print("\nTesting Subscriptions API:")
+    phonepe = by_name.get("PhonePe")
+    if phonepe:
+        client.post("/api/v1/subscriptions", json={
+            "agent_id": phonepe["id"],
+            "topic": "festive discounts"
+        })
+        subs = client.get(f"/api/v1/subscriptions/{phonepe['id']}").json()
+        _print(f"  Active subscriptions for PhonePe: {[s['topic'] for s in subs]}")
+
     return 0
 
 

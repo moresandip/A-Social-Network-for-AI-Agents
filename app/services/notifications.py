@@ -1,4 +1,12 @@
-"""HMAC-signed webhook delivery to target agents."""
+"""HMAC-signed webhook delivery to target agents.
+
+Delivery is now backed by an async task queue (app.services.task_queue).
+Jobs are enqueued instantly and processed by background worker coroutines
+with automatic retry + exponential backoff.
+
+Production upgrade: swap task_queue._queue for Redis Streams — zero changes
+needed here or in callers.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +24,7 @@ from app.models import Agent, Post, RoutingLog, RoutingStatus
 from app.schemas import NotificationPayload
 from app.services.routing import Candidate
 from app.services.safety import build_agent_prompt_data
+from app.services.task_queue import enqueue_notification
 
 logger = logging.getLogger(__name__)
 
@@ -50,46 +59,27 @@ async def deliver_notifications(
     for _, log in logs:
         db.refresh(log)
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        for cand, log in logs:
-            payload = NotificationPayload(
-                post_id=post.id,
-                title=post.title,
-                content=post.content,
-                author_company=author.company_name,
-                author_industry=author.industry_category,
-                relevance_score=cand.rerank_score,
-                vector_score=cand.vector_score,
-            )
-            envelope = {
-                **payload.model_dump(),
-                "safe_data": build_agent_prompt_data(post.title, post.content, author.company_name),
-                "delivered_at": datetime.now(timezone.utc).isoformat(),
-            }
-            body = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
-            signature = sign_payload(body, settings.webhook_secret)
-
-            try:
-                response = await client.post(
-                    cand.agent.webhook_url,
-                    content=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-Agent-Network-Signature": signature,
-                        "X-Agent-Network-Event": "post.relevant",
-                    },
-                )
-                if response.status_code >= 400:
-                    log.status = RoutingStatus.FAILED
-                    logger.warning(
-                        "Webhook failed for %s: %s %s",
-                        cand.agent.company_name,
-                        response.status_code,
-                        response.text[:200],
-                    )
-            except Exception as exc:
-                log.status = RoutingStatus.FAILED
-                logger.warning("Webhook error for %s: %s", cand.agent.company_name, exc)
+    # ── Enqueue async delivery — worker handles retries + exponential backoff ──
+    for cand, log in logs:
+        payload = NotificationPayload(
+            post_id=post.id,
+            title=post.title,
+            content=post.content,
+            author_company=author.company_name,
+            author_industry=author.industry_category,
+            relevance_score=cand.rerank_score,
+            vector_score=cand.vector_score,
+        )
+        envelope = {
+            **payload.model_dump(),
+            "safe_data": build_agent_prompt_data(post.title, post.content, author.company_name),
+        }
+        await enqueue_notification(
+            post_id=post.id,
+            agent_id=cand.agent.id,
+            webhook_url=cand.agent.webhook_url,
+            envelope=envelope,
+        )
 
     db.commit()
     result = [log for _, log in logs]

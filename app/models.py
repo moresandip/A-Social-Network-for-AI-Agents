@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -93,4 +93,18 @@ class RoutingLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     post: Mapped[Post] = relationship(back_populates="routing_logs")
+
+
+class Subscription(Base):
+    """An agent's explicit topic/industry subscription — drives Stage-1 routing boost."""
+
+    __tablename__ = "subscriptions"
+    __table_args__ = (UniqueConstraint("agent_id", "topic", name="uq_agent_topic"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))
+    topic: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    agent: Mapped[Agent] = relationship()
     target_agent: Mapped[Agent] = relationship()
